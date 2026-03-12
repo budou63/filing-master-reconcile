@@ -1,5 +1,8 @@
 Option Explicit
 
+'=========================================================
+' 文書管理システム出力 × 基準表 突合メイン
+'=========================================================
 Public Sub 文書管理システム_基準表突合()
 
     Dim wbCSV As Workbook
@@ -49,6 +52,7 @@ Public Sub 文書管理システム_基準表突合()
     Dim wsUnmatchedChild As Worksheet
     Dim msg As String
 
+    ' 子側で一致に使った行を記録する（True = 使用済み）
     Dim matchedMasterRows() As Boolean
 
     Const MATCH_THRESHOLD As Long = 60
@@ -181,7 +185,6 @@ Public Sub 文書管理システム_基準表突合()
     unmatchParentRow = 2
     unmatchChildRow = 2
 
-    ' 子側の「一致に使われた行」を記録する配列を初期化
     ReDim matchedMasterRows(masterDataStartRow To masterLastRow)
 
     '========================
@@ -201,17 +204,20 @@ Public Sub 文書管理システム_基準表突合()
 
         For mr = masterDataStartRow To masterLastRow
 
-            masterFolder = CStr(wsMaster.Cells(mr, colFolder).Value)
-            masterGuide2 = CStr(wsMaster.Cells(mr, colGuide2).Value)
+            ' キーが空の行は判定対象から除外
+            If IsMeaningfulMasterRow(wsMaster, mr, colFolder, colGuide2) Then
+                masterFolder = CStr(wsMaster.Cells(mr, colFolder).Value)
+                masterGuide2 = CStr(wsMaster.Cells(mr, colGuide2).Value)
 
-            currentScore = MatchScore(titleVal, class3Val, masterFolder, masterGuide2)
+                currentScore = MatchScore(titleVal, class3Val, masterFolder, masterGuide2)
 
-            If currentScore > bestScore Then
-                bestScore = currentScore
-                bestRow = mr
+                If currentScore > bestScore Then
+                    bestScore = currentScore
+                    bestRow = mr
+                End If
+
+                If bestScore >= 100 Then Exit For
             End If
-
-            If bestScore >= 100 Then Exit For
         Next mr
 
         If bestRow > 0 And bestScore >= MATCH_THRESHOLD Then
@@ -223,11 +229,10 @@ Public Sub 文書管理システム_基準表突合()
             ' 一致に使われた子側行を記録（後で未突合_子側作成に使用）
             matchedMasterRows(bestRow) = True
 
-            ' 差異チェック（該当セル中心に着色）
-            ApplyDiffHighlight wsCSV, wsMaster, r, bestRow, _
-                               colCsvRetention, colCsvMediaType, _
-                               colMasterRetention, colOutputMasterRetention, _
-                               COLOR_RETENTION_DIFF, COLOR_MEDIA_NOT_ELECTRONIC
+            ' 保存期間差異チェック（保存期間のみ）
+            ApplyRetentionDiffHighlight wsCSV, wsMaster, r, bestRow, _
+                                        colCsvRetention, colMasterRetention, colOutputMasterRetention, _
+                                        COLOR_RETENTION_DIFF
         Else
             ' 未一致の親側行を「未突合_親側」へ出力
             OutputParentUnmatchedRow wsUnmatchedParent, wsCSV, r, csvLastCol, _
@@ -241,11 +246,18 @@ Public Sub 文書管理システム_基準表突合()
     ' 子側未突合の出力（1度も一致に使われていない行）
     '========================
     For r = masterDataStartRow To masterLastRow
-        If Not matchedMasterRows(r) Then
-            OutputChildUnmatchedRow wsUnmatchedChild, wsMaster, r, masterLastCol, unmatchChildRow
-            unmatchChildRow = unmatchChildRow + 1
+        If IsMeaningfulMasterRow(wsMaster, r, colFolder, colGuide2) Then
+            If Not matchedMasterRows(r) Then
+                OutputChildUnmatchedRow wsUnmatchedChild, wsMaster, r, masterLastCol, unmatchChildRow
+                unmatchChildRow = unmatchChildRow + 1
+            End If
         End If
     Next r
+
+    '========================
+    ' 媒体種別チェック（A. 一括チェック）
+    '========================
+    ApplyMediaTypeHighlightToAllRows wsCSV, csvHeaderRow, csvDataStartRow, csvLastRow, COLOR_MEDIA_NOT_ELECTRONIC
 
     '========================
     ' 列の表示制御（見出し名ベース）
@@ -276,6 +288,72 @@ ExitProc:
 ErrHandler:
     MsgBox "エラー：" & Err.Description, vbExclamation
     Resume ExitProc
+
+End Sub
+
+'=========================================================
+' 媒体種別リアルタイム色付け（イベントから呼び出し可能）
+'=========================================================
+Public Sub HandleMediaTypeCells(ByVal ws As Worksheet, ByVal changedRange As Range)
+
+    On Error GoTo SafeExit
+
+    Dim headerRow As Long
+    Dim dataStartRow As Long
+    Dim mediaCol As Long
+    Dim hit As Range
+    Dim cell As Range
+
+    headerRow = 1
+    dataStartRow = 2
+
+    mediaCol = FindHeaderColumn(ws, headerRow, "媒体種別")
+    If mediaCol = 0 Then Exit Sub
+
+    Set hit = Intersect(changedRange, ws.Columns(mediaCol))
+    If hit Is Nothing Then Exit Sub
+
+    Application.EnableEvents = False
+
+    For Each cell In hit.Cells
+        If cell.Row >= dataStartRow Then
+            ApplyMediaTypeHighlightToCell cell, 49407
+        End If
+    Next cell
+
+SafeExit:
+    Application.EnableEvents = True
+
+End Sub
+
+Private Sub ApplyMediaTypeHighlightToAllRows(ByVal ws As Worksheet, _
+                                             ByVal headerRow As Long, _
+                                             ByVal dataStartRow As Long, _
+                                             ByVal lastRow As Long, _
+                                             ByVal warningColor As Long)
+
+    Dim mediaCol As Long
+    Dim r As Long
+
+    mediaCol = FindHeaderColumn(ws, headerRow, "媒体種別")
+    If mediaCol = 0 Then Exit Sub
+
+    For r = dataStartRow To lastRow
+        ApplyMediaTypeHighlightToCell ws.Cells(r, mediaCol), warningColor
+    Next r
+
+End Sub
+
+Private Sub ApplyMediaTypeHighlightToCell(ByVal targetCell As Range, ByVal warningColor As Long)
+
+    Dim mediaVal As String
+    mediaVal = Trim$(CStr(targetCell.Value))
+
+    If mediaVal = "" Or mediaVal = "電子" Then
+        targetCell.Interior.Pattern = xlNone
+    Else
+        targetCell.Interior.Color = warningColor
+    End If
 
 End Sub
 
@@ -338,7 +416,6 @@ Private Function DetectMasterHeaderRow(ByVal ws As Worksheet, ByVal startRow As 
         End If
     Next r
 
-    ' 必須2項目（各2点）で4点。これ未満なら見出しと判定しない。
     If bestScore < 4 Then DetectMasterHeaderRow = 0
 
 End Function
@@ -347,11 +424,9 @@ Private Function GetHeaderScore(ByVal ws As Worksheet, ByVal rowNo As Long) As L
 
     Dim score As Long
 
-    ' 必須見出し（重みを高くする）
     If FindHeaderColumn(ws, rowNo, "個別フォルダー") > 0 Then score = score + 2
     If FindHeaderColumn(ws, rowNo, "第２ガイド") > 0 Then score = score + 2
 
-    ' 補助見出し
     If FindHeaderColumn(ws, rowNo, "保存期間") > 0 Then score = score + 1
     If FindHeaderColumn(ws, rowNo, "媒体") > 0 Then score = score + 1
     If FindHeaderColumn(ws, rowNo, "備考") > 0 Then score = score + 1
@@ -373,6 +448,21 @@ Private Function GetMasterLastRow(ByVal ws As Worksheet, ByVal colFolder As Long
     Else
         GetMasterLastRow = lastByGuide
     End If
+
+End Function
+
+Private Function IsMeaningfulMasterRow(ByVal wsMaster As Worksheet, _
+                                       ByVal rowNo As Long, _
+                                       ByVal colFolder As Long, _
+                                       ByVal colGuide2 As Long) As Boolean
+
+    Dim folderVal As String
+    Dim guideVal As String
+
+    folderVal = Trim$(CStr(wsMaster.Cells(rowNo, colFolder).Value))
+    guideVal = Trim$(CStr(wsMaster.Cells(rowNo, colGuide2).Value))
+
+    IsMeaningfulMasterRow = Not (folderVal = "" And guideVal = "")
 
 End Function
 
@@ -475,30 +565,96 @@ Private Sub ClearDiffHighlight(ByVal ws As Worksheet, ByVal startRow As Long, By
 
 End Sub
 
-Private Sub ApplyDiffHighlight(ByVal wsCSV As Worksheet, ByVal wsMaster As Worksheet, ByVal csvRow As Long, ByVal masterRow As Long, ByVal colCsvRetention As Long, ByVal colCsvMediaType As Long, ByVal colMasterRetention As Long, ByVal colOutputMasterRetention As Long, ByVal retentionColor As Long, ByVal mediaColor As Long)
+Private Sub ApplyRetentionDiffHighlight(ByVal wsCSV As Worksheet, _
+                                        ByVal wsMaster As Worksheet, _
+                                        ByVal csvRow As Long, _
+                                        ByVal masterRow As Long, _
+                                        ByVal colCsvRetention As Long, _
+                                        ByVal colMasterRetention As Long, _
+                                        ByVal colOutputMasterRetention As Long, _
+                                        ByVal retentionColor As Long)
 
-    Dim csvRetention As String
-    Dim masterRetention As String
-    Dim csvMedia As String
+    Dim csvRetentionRaw As String
+    Dim masterRetentionRaw As String
+    Dim csvRetentionNorm As String
+    Dim masterRetentionNorm As String
 
-    csvRetention = Trim$(CStr(wsCSV.Cells(csvRow, colCsvRetention).Value))
-    masterRetention = Trim$(CStr(wsMaster.Cells(masterRow, colMasterRetention).Value))
-    csvMedia = Trim$(CStr(wsCSV.Cells(csvRow, colCsvMediaType).Value))
+    csvRetentionRaw = Trim$(CStr(wsCSV.Cells(csvRow, colCsvRetention).Value))
+    masterRetentionRaw = Trim$(CStr(wsMaster.Cells(masterRow, colMasterRetention).Value))
 
-    ' ① 保存期間差異チェック
-    If Not (csvRetention = "" And masterRetention = "") Then
-        If csvRetention <> masterRetention Then
-            wsCSV.Cells(csvRow, colCsvRetention).Interior.Color = retentionColor
-            wsCSV.Cells(csvRow, colOutputMasterRetention).Interior.Color = retentionColor
-        End If
-    End If
+    ' 空欄同士は差異なし
+    If csvRetentionRaw = "" And masterRetentionRaw = "" Then Exit Sub
 
-    ' ② 媒体種別チェック（親側が「電子」以外で警告）
-    If csvMedia <> "電子" Then
-        wsCSV.Cells(csvRow, colCsvMediaType).Interior.Color = mediaColor
+    csvRetentionNorm = NormalizeRetentionPeriod(csvRetentionRaw)
+    masterRetentionNorm = NormalizeRetentionPeriod(masterRetentionRaw)
+
+    If csvRetentionNorm <> masterRetentionNorm Then
+        wsCSV.Cells(csvRow, colCsvRetention).Interior.Color = retentionColor
+        wsCSV.Cells(csvRow, colOutputMasterRetention).Interior.Color = retentionColor
     End If
 
 End Sub
+
+Private Function NormalizeRetentionPeriod(ByVal retentionText As String) As String
+
+    Dim t As String
+
+    t = CStr(retentionText)
+
+    ' 改行・タブ・スペース除去
+    t = Replace(t, vbCr, "")
+    t = Replace(t, vbLf, "")
+    t = Replace(t, vbTab, "")
+    t = Replace(t, " ", "")
+    t = Replace(t, "　", "")
+
+    On Error Resume Next
+    t = StrConv(t, vbNarrow)
+    On Error GoTo 0
+
+    t = LCase$(Trim$(t))
+
+    ' 表記ゆれ吸収（永年・永久）
+    If InStr(1, t, "永久", vbTextCompare) > 0 Or InStr(1, t, "永年", vbTextCompare) > 0 Then
+        NormalizeRetentionPeriod = "永久"
+        Exit Function
+    End If
+
+    ' 不要語を除去
+    t = Replace(t, "年保存", "年")
+    t = Replace(t, "年間", "年")
+    t = Replace(t, "保存", "")
+
+    ' 例: 5年 / ５年 / 5 年 / 5年保存 / 5年間 を「5年」に寄せる
+    Dim years As String
+    years = ExtractLeadingNumber(t)
+
+    If years <> "" Then
+        NormalizeRetentionPeriod = CLng(years) & "年"
+    Else
+        NormalizeRetentionPeriod = t
+    End If
+
+End Function
+
+Private Function ExtractLeadingNumber(ByVal s As String) As String
+
+    Dim i As Long
+    Dim ch As String
+    Dim n As String
+
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch Like "[0-9]" Then
+            n = n & ch
+        ElseIf n <> "" Then
+            Exit For
+        End If
+    Next i
+
+    ExtractLeadingNumber = n
+
+End Function
 
 Private Sub ApplyColumnVisibility(ByVal ws As Worksheet, _
                                   ByVal headerRow As Long, _
