@@ -1,0 +1,378 @@
+Option Explicit
+
+Public Sub 文書管理システム_基準表突合()
+
+    Dim wbCSV As Workbook
+    Dim wsCSV As Worksheet
+    
+    Dim fd As FileDialog
+    Dim selectedPath As String
+    
+    Dim wbMaster As Workbook
+    Dim wsMaster As Worksheet
+    
+    Dim csvHeaderRow As Long
+    Dim masterHeaderRow As Long
+    Dim masterDataStartRow As Long
+    
+    Dim csvLastRow As Long
+    Dim csvLastCol As Long
+    Dim masterLastRow As Long
+    Dim masterLastCol As Long
+    
+    Dim colTitle As Long
+    Dim colClass3 As Long
+    Dim outputStartCol As Long
+    
+    Dim colFolder As Long
+    Dim colGuide2 As Long
+    
+    Dim r As Long, c As Long
+    Dim bestRow As Long
+    Dim unmatchRow As Long
+    
+    Dim titleVal As String
+    Dim class3Val As String
+    
+    Dim bestScore As Long
+    Dim currentScore As Long
+    
+    Dim wsUnmatched As Worksheet
+    Dim msg As String
+    
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    Application.DisplayAlerts = False
+    
+    On Error GoTo ErrHandler
+    
+    Set wbCSV = ThisWorkbook
+    Set wsCSV = ActiveSheet
+    
+    csvHeaderRow = 1
+    masterHeaderRow = 9
+    masterDataStartRow = 10
+    outputStartCol = Columns("DR").Column
+    
+    '========================
+    ' 文書管理システム出力側の列取得
+    '========================
+    colTitle = FindHeaderColumn(wsCSV, csvHeaderRow, "タイトル")
+    colClass3 = FindHeaderColumn(wsCSV, csvHeaderRow, "分類名３")
+    
+    If colTitle = 0 Then
+        Err.Raise vbObjectError + 1000, , "文書管理システム出力側で見出し「タイトル」が見つかりません。"
+    End If
+    
+    If colClass3 = 0 Then
+        Err.Raise vbObjectError + 1001, , "文書管理システム出力側で見出し「分類名３」が見つかりません。"
+    End If
+    
+    csvLastRow = wsCSV.Cells(wsCSV.Rows.Count, colTitle).End(xlUp).Row
+    csvLastCol = wsCSV.Cells(csvHeaderRow, wsCSV.Columns.Count).End(xlToLeft).Column
+    
+    '========================
+    ' 基準表ファイル選択
+    '========================
+    Set fd = Application.FileDialog(msoFileDialogFilePicker)
+    With fd
+        .Title = "突合する基準表ファイルを選択してください"
+        .Filters.Clear
+        .Filters.Add "Excel Files", "*.xlsx; *.xlsm; *.xls"
+        .AllowMultiSelect = False
+        
+        If .Show <> -1 Then
+            MsgBox "処理を中止しました。", vbInformation
+            GoTo ExitProc
+        End If
+        
+        selectedPath = .SelectedItems(1)
+    End With
+    
+    Set wbMaster = Workbooks.Open(selectedPath, ReadOnly:=True)
+    
+    On Error Resume Next
+    Set wsMaster = wbMaster.Worksheets("基準表")
+    On Error GoTo ErrHandler
+    
+    If wsMaster Is Nothing Then
+        Err.Raise vbObjectError + 1002, , "選択したファイルに「基準表」シートが見つかりません。"
+    End If
+    
+    '========================
+    ' 基準表側の列取得
+    '========================
+    colFolder = FindHeaderColumn(wsMaster, masterHeaderRow, "個別フォルダー")
+    colGuide2 = FindHeaderColumn(wsMaster, masterHeaderRow, "第２ガイド")
+    
+    If colFolder = 0 Then
+        Err.Raise vbObjectError + 1003, , "基準表で見出し「個別フォルダー」が見つかりません。"
+    End If
+    
+    If colGuide2 = 0 Then
+        Err.Raise vbObjectError + 1004, , "基準表で見出し「第２ガイド」が見つかりません。"
+    End If
+    
+    masterLastCol = wsMaster.Cells(masterHeaderRow, wsMaster.Columns.Count).End(xlToLeft).Column
+    masterLastRow = wsMaster.Cells(wsMaster.Rows.Count, colFolder).End(xlUp).Row
+    
+    '========================
+    ' 出力欄の初期化
+    '========================
+    wsCSV.Range(wsCSV.Cells(csvHeaderRow, outputStartCol), _
+                wsCSV.Cells(wsCSV.Rows.Count, outputStartCol + masterLastCol - 1)).ClearContents
+    
+    ' DR列以降の見出し出力
+    For c = 1 To masterLastCol
+        If Trim(CStr(wsMaster.Cells(masterHeaderRow, c).Value)) <> "" Then
+            wsCSV.Cells(csvHeaderRow, outputStartCol + c - 1).Value = wsMaster.Cells(masterHeaderRow, c).Value
+        Else
+            wsCSV.Cells(csvHeaderRow, outputStartCol + c - 1).Value = "空白列" & c
+        End If
+    Next c
+    
+    '========================
+    ' 未突合シート作成
+    '========================
+    DeleteSheetIfExists wbCSV, "未突合"
+    Set wsUnmatched = wbCSV.Worksheets.Add(After:=wbCSV.Worksheets(wbCSV.Worksheets.Count))
+    wsUnmatched.Name = "未突合"
+    
+    ' 未突合シート見出し
+    For c = 1 To csvLastCol
+        wsUnmatched.Cells(1, c).Value = wsCSV.Cells(csvHeaderRow, c).Value
+    Next c
+    
+    For c = 1 To masterLastCol
+        If Trim(CStr(wsMaster.Cells(masterHeaderRow, c).Value)) <> "" Then
+            wsUnmatched.Cells(1, csvLastCol + c).Value = wsMaster.Cells(masterHeaderRow, c).Value
+        Else
+            wsUnmatched.Cells(1, csvLastCol + c).Value = "空白列" & c
+        End If
+    Next c
+    
+    wsUnmatched.Cells(1, csvLastCol + masterLastCol + 1).Value = "未突合理由"
+    unmatchRow = 2
+    
+    '========================
+    ' 突合実行
+    '========================
+    For r = 2 To csvLastRow
+        
+        titleVal = CStr(wsCSV.Cells(r, colTitle).Value)
+        class3Val = CStr(wsCSV.Cells(r, colClass3).Value)
+        
+        bestRow = 0
+        bestScore = 0
+        
+        Dim mr As Long
+        Dim masterFolder As String
+        Dim masterGuide2 As String
+        
+        For mr = masterDataStartRow To masterLastRow
+            
+            masterFolder = CStr(wsMaster.Cells(mr, colFolder).Value)
+            masterGuide2 = CStr(wsMaster.Cells(mr, colGuide2).Value)
+            
+            currentScore = MatchScore(titleVal, class3Val, masterFolder, masterGuide2)
+            
+            If currentScore > bestScore Then
+                bestScore = currentScore
+                bestRow = mr
+            End If
+            
+            ' 満点なら即確定
+            If bestScore >= 100 Then Exit For
+        Next mr
+        
+        If bestRow > 0 And bestScore >= 60 Then
+            ' 一致した場合：基準表行をDR列以降へ全列出力
+            For c = 1 To masterLastCol
+                wsCSV.Cells(r, outputStartCol + c - 1).Value = wsMaster.Cells(bestRow, c).Value
+            Next c
+        Else
+            ' 未突合：CSV行を未突合シートへ出力
+            For c = 1 To csvLastCol
+                wsUnmatched.Cells(unmatchRow, c).Value = wsCSV.Cells(r, c).Value
+            Next c
+            
+            wsUnmatched.Cells(unmatchRow, csvLastCol + masterLastCol + 1).Value = _
+                "一致候補なし（タイトル=" & titleVal & " / 分類名３=" & class3Val & "）"
+            
+            unmatchRow = unmatchRow + 1
+        End If
+        
+    Next r
+    
+    wsCSV.Columns(outputStartCol).Resize(, masterLastCol).EntireColumn.AutoFit
+    wsUnmatched.Columns.AutoFit
+    
+    msg = "突合処理が完了しました。" & vbCrLf & _
+          "一致データは DR列以降へ出力しました。" & vbCrLf & _
+          "未突合件数：" & (unmatchRow - 2) & "件"
+    
+    MsgBox msg, vbInformation
+    
+ExitProc:
+    On Error Resume Next
+    If Not wbMaster Is Nothing Then wbMaster.Close SaveChanges:=False
+    
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+    Exit Sub
+
+ErrHandler:
+    MsgBox "エラー：" & Err.Description, vbExclamation
+    
+    Resume ExitProc
+
+End Sub
+
+
+Private Function FindHeaderColumn(ByVal ws As Worksheet, ByVal headerRow As Long, ByVal headerName As String) As Long
+    
+    Dim lastCol As Long
+    Dim c As Long
+    Dim cellVal As String
+    
+    lastCol = ws.Cells(headerRow, ws.Columns.Count).End(xlToLeft).Column
+    
+    For c = 1 To lastCol
+        cellVal = Trim(CStr(ws.Cells(headerRow, c).Value))
+        If cellVal = headerName Then
+            FindHeaderColumn = c
+            Exit Function
+        End If
+    Next c
+    
+    FindHeaderColumn = 0
+    
+End Function
+
+
+Private Function MatchScore(ByVal csvTitle As String, _
+                            ByVal csvClass3 As String, _
+                            ByVal masterFolder As String, _
+                            ByVal masterGuide2 As String) As Long
+    
+    Dim nCsvTitle As String
+    Dim nCsvClass3 As String
+    Dim nMasterFolder As String
+    Dim nMasterGuide2 As String
+    
+    nCsvTitle = NormalizeText(csvTitle)
+    nCsvClass3 = NormalizeText(csvClass3)
+    nMasterFolder = NormalizeText(masterFolder)
+    nMasterGuide2 = NormalizeText(masterGuide2)
+    
+    ' 分類名３ ? 第２ガイド を重めに評価
+    If nCsvTitle = "" Or nCsvClass3 = "" Or nMasterFolder = "" Or nMasterGuide2 = "" Then
+        MatchScore = 0
+        Exit Function
+    End If
+    
+    ' 完全一致
+    If nCsvTitle = nMasterFolder And nCsvClass3 = nMasterGuide2 Then
+        MatchScore = 100
+        Exit Function
+    End If
+    
+    ' 分類一致 + タイトル部分一致
+    If nCsvClass3 = nMasterGuide2 Then
+        If InStr(1, nCsvTitle, nMasterFolder, vbTextCompare) > 0 _
+           Or InStr(1, nMasterFolder, nCsvTitle, vbTextCompare) > 0 Then
+            MatchScore = 80
+            Exit Function
+        End If
+    End If
+    
+    ' タイトル一致 + 分類部分一致
+    If nCsvTitle = nMasterFolder Then
+        If InStr(1, nCsvClass3, nMasterGuide2, vbTextCompare) > 0 _
+           Or InStr(1, nMasterGuide2, nCsvClass3, vbTextCompare) > 0 Then
+            MatchScore = 75
+            Exit Function
+        End If
+    End If
+    
+    ' 両方部分一致
+    If (InStr(1, nCsvTitle, nMasterFolder, vbTextCompare) > 0 _
+        Or InStr(1, nMasterFolder, nCsvTitle, vbTextCompare) > 0) _
+       And _
+       (InStr(1, nCsvClass3, nMasterGuide2, vbTextCompare) > 0 _
+        Or InStr(1, nMasterGuide2, nCsvClass3, vbTextCompare) > 0) Then
+        
+        MatchScore = 60
+        Exit Function
+    End If
+    
+    MatchScore = 0
+    
+End Function
+
+
+Private Function NormalizeText(ByVal s As String) As String
+    
+    Dim t As String
+    
+    t = CStr(s)
+    
+    ' 改行・タブ除去
+    t = Replace(t, vbCr, "")
+    t = Replace(t, vbLf, "")
+    t = Replace(t, vbTab, "")
+    
+    ' 全角→半角（英数記号）
+    On Error Resume Next
+    t = StrConv(t, vbNarrow)
+    On Error GoTo 0
+    
+    ' スペース除去
+    t = Replace(t, " ", "")
+    t = Replace(t, "　", "")
+    
+    ' よくある記号除去
+    t = Replace(t, "‐", "")
+    t = Replace(t, "-", "")
+    t = Replace(t, "―", "")
+    t = Replace(t, "－", "")
+    t = Replace(t, "ｰ", "")
+    t = Replace(t, "・", "")
+    t = Replace(t, "･", "")
+    t = Replace(t, "（", "")
+    t = Replace(t, "）", "")
+    t = Replace(t, "(", "")
+    t = Replace(t, ")", "")
+    t = Replace(t, "【", "")
+    t = Replace(t, "】", "")
+    t = Replace(t, "[", "")
+    t = Replace(t, "]", "")
+    t = Replace(t, "／", "")
+    t = Replace(t, "/", "")
+    t = Replace(t, "、", "")
+    t = Replace(t, "。", "")
+    t = Replace(t, "，", "")
+    t = Replace(t, ",", "")
+    
+    t = LCase$(Trim$(t))
+    
+    NormalizeText = t
+    
+End Function
+
+
+Private Sub DeleteSheetIfExists(ByVal wb As Workbook, ByVal sheetName As String)
+    
+    Dim ws As Worksheet
+    
+    On Error Resume Next
+    Set ws = wb.Worksheets(sheetName)
+    On Error GoTo 0
+    
+    If Not ws Is Nothing Then
+        ws.Delete
+    End If
+    
+End Sub
+
