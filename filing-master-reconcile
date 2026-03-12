@@ -36,7 +36,8 @@ Public Sub 文書管理システム_基準表突合()
 
     Dim r As Long, c As Long
     Dim bestRow As Long
-    Dim unmatchRow As Long
+    Dim unmatchParentRow As Long
+    Dim unmatchChildRow As Long
 
     Dim titleVal As String
     Dim class3Val As String
@@ -44,12 +45,15 @@ Public Sub 文書管理システム_基準表突合()
     Dim bestScore As Long
     Dim currentScore As Long
 
-    Dim wsUnmatched As Worksheet
+    Dim wsUnmatchedParent As Worksheet
+    Dim wsUnmatchedChild As Worksheet
     Dim msg As String
+
+    Dim matchedMasterRows() As Boolean
 
     Const MATCH_THRESHOLD As Long = 60
     Const COLOR_RETENTION_DIFF As Long = vbYellow
-    Const COLOR_MEDIA_NOT_ELECTRONIC As Long = 49407 'Orange
+    Const COLOR_MEDIA_NOT_ELECTRONIC As Long = 49407 ' Orange
 
     Application.ScreenUpdating = False
     Application.EnableEvents = False
@@ -159,14 +163,26 @@ Public Sub 文書管理システム_基準表突合()
     ClearDiffHighlight wsCSV, csvDataStartRow, csvLastRow, colOutputMasterRetention
 
     '========================
-    ' 未突合シート作成
+    ' 未突合シート（2枚）作成
     '========================
     DeleteSheetIfExists wbCSV, "未突合"
-    Set wsUnmatched = wbCSV.Worksheets.Add(After:=wbCSV.Worksheets(wbCSV.Worksheets.Count))
-    wsUnmatched.Name = "未突合"
+    DeleteSheetIfExists wbCSV, "未突合_親側"
+    DeleteSheetIfExists wbCSV, "未突合_子側"
 
-    BuildUnmatchedHeader wsUnmatched, wsCSV, wsMaster, csvHeaderRow, masterHeaderRow, csvLastCol, masterLastCol
-    unmatchRow = 2
+    Set wsUnmatchedParent = wbCSV.Worksheets.Add(After:=wbCSV.Worksheets(wbCSV.Worksheets.Count))
+    wsUnmatchedParent.Name = "未突合_親側"
+
+    Set wsUnmatchedChild = wbCSV.Worksheets.Add(After:=wbCSV.Worksheets(wbCSV.Worksheets.Count))
+    wsUnmatchedChild.Name = "未突合_子側"
+
+    BuildParentUnmatchedHeader wsUnmatchedParent, wsCSV, csvHeaderRow, csvLastCol
+    BuildChildUnmatchedHeader wsUnmatchedChild, wsMaster, masterHeaderRow, masterLastCol
+
+    unmatchParentRow = 2
+    unmatchChildRow = 2
+
+    ' 子側の「一致に使われた行」を記録する配列を初期化
+    ReDim matchedMasterRows(masterDataStartRow To masterLastRow)
 
     '========================
     ' 突合実行（親側を基準に1行ずつ）
@@ -204,18 +220,31 @@ Public Sub 文書管理システム_基準表突合()
                 wsCSV.Cells(r, outputStartCol + c - 1).Value = wsMaster.Cells(bestRow, c).Value
             Next c
 
+            ' 一致に使われた子側行を記録（後で未突合_子側作成に使用）
+            matchedMasterRows(bestRow) = True
+
             ' 差異チェック（該当セル中心に着色）
             ApplyDiffHighlight wsCSV, wsMaster, r, bestRow, _
                                colCsvRetention, colCsvMediaType, _
                                colMasterRetention, colOutputMasterRetention, _
                                COLOR_RETENTION_DIFF, COLOR_MEDIA_NOT_ELECTRONIC
         Else
-            ' 未突合シートへ親側行を出力
-            OutputUnmatchedRow wsUnmatched, wsCSV, r, csvLastCol, _
-                             "一致候補なし（タイトル=" & titleVal & " / 分類名３=" & class3Val & "）", unmatchRow, masterLastCol
-            unmatchRow = unmatchRow + 1
+            ' 未一致の親側行を「未突合_親側」へ出力
+            OutputParentUnmatchedRow wsUnmatchedParent, wsCSV, r, csvLastCol, _
+                                     GetUnmatchedReason(titleVal, class3Val, bestScore), unmatchParentRow
+            unmatchParentRow = unmatchParentRow + 1
         End If
 
+    Next r
+
+    '========================
+    ' 子側未突合の出力（1度も一致に使われていない行）
+    '========================
+    For r = masterDataStartRow To masterLastRow
+        If Not matchedMasterRows(r) Then
+            OutputChildUnmatchedRow wsUnmatchedChild, wsMaster, r, masterLastCol, unmatchChildRow
+            unmatchChildRow = unmatchChildRow + 1
+        End If
     Next r
 
     '========================
@@ -224,12 +253,14 @@ Public Sub 文書管理システム_基準表突合()
     ApplyColumnVisibility wsCSV, csvHeaderRow, outputStartCol, outputEndCol
 
     wsCSV.Columns(outputStartCol).Resize(, masterLastCol).EntireColumn.AutoFit
-    wsUnmatched.Columns.AutoFit
+    wsUnmatchedParent.Columns.AutoFit
+    wsUnmatchedChild.Columns.AutoFit
 
     msg = "突合処理が完了しました。" & vbCrLf & _
           "基準表の見出し行: " & masterHeaderRow & "行目（自動判定）" & vbCrLf & _
           "一致データは DR列以降へ出力しました。" & vbCrLf & _
-          "未突合件数：" & (unmatchRow - 2) & "件"
+          "未突合_親側件数：" & (unmatchParentRow - 2) & "件" & vbCrLf & _
+          "未突合_子側件数：" & (unmatchChildRow - 2) & "件"
 
     MsgBox msg, vbInformation
 
@@ -358,13 +389,10 @@ Private Function GetSafeHeaderName(ByVal v As Variant, ByVal indexNo As Long) As
 
 End Function
 
-Private Sub BuildUnmatchedHeader(ByVal wsUnmatched As Worksheet, _
-                                 ByVal wsCSV As Worksheet, _
-                                 ByVal wsMaster As Worksheet, _
-                                 ByVal csvHeaderRow As Long, _
-                                 ByVal masterHeaderRow As Long, _
-                                 ByVal csvLastCol As Long, _
-                                 ByVal masterLastCol As Long)
+Private Sub BuildParentUnmatchedHeader(ByVal wsUnmatched As Worksheet, _
+                                       ByVal wsCSV As Worksheet, _
+                                       ByVal csvHeaderRow As Long, _
+                                       ByVal csvLastCol As Long)
 
     Dim c As Long
 
@@ -372,21 +400,29 @@ Private Sub BuildUnmatchedHeader(ByVal wsUnmatched As Worksheet, _
         wsUnmatched.Cells(1, c).Value = wsCSV.Cells(csvHeaderRow, c).Value
     Next c
 
-    For c = 1 To masterLastCol
-        wsUnmatched.Cells(1, csvLastCol + c).Value = GetSafeHeaderName(wsMaster.Cells(masterHeaderRow, c).Value, c)
-    Next c
-
-    wsUnmatched.Cells(1, csvLastCol + masterLastCol + 1).Value = "未突合理由"
+    wsUnmatched.Cells(1, csvLastCol + 1).Value = "未突合理由"
 
 End Sub
 
-Private Sub OutputUnmatchedRow(ByVal wsUnmatched As Worksheet, _
-                               ByVal wsCSV As Worksheet, _
-                               ByVal csvRow As Long, _
-                               ByVal csvLastCol As Long, _
-                               ByVal reason As String, _
-                               ByVal outRow As Long, _
-                               ByVal masterLastCol As Long)
+Private Sub BuildChildUnmatchedHeader(ByVal wsUnmatched As Worksheet, _
+                                      ByVal wsMaster As Worksheet, _
+                                      ByVal masterHeaderRow As Long, _
+                                      ByVal masterLastCol As Long)
+
+    Dim c As Long
+
+    For c = 1 To masterLastCol
+        wsUnmatched.Cells(1, c).Value = GetSafeHeaderName(wsMaster.Cells(masterHeaderRow, c).Value, c)
+    Next c
+
+End Sub
+
+Private Sub OutputParentUnmatchedRow(ByVal wsUnmatched As Worksheet, _
+                                     ByVal wsCSV As Worksheet, _
+                                     ByVal csvRow As Long, _
+                                     ByVal csvLastCol As Long, _
+                                     ByVal reason As String, _
+                                     ByVal outRow As Long)
 
     Dim c As Long
 
@@ -394,9 +430,43 @@ Private Sub OutputUnmatchedRow(ByVal wsUnmatched As Worksheet, _
         wsUnmatched.Cells(outRow, c).Value = wsCSV.Cells(csvRow, c).Value
     Next c
 
-    wsUnmatched.Cells(outRow, csvLastCol + masterLastCol + 1).Value = reason
+    wsUnmatched.Cells(outRow, csvLastCol + 1).Value = reason
 
 End Sub
+
+Private Sub OutputChildUnmatchedRow(ByVal wsUnmatched As Worksheet, _
+                                    ByVal wsMaster As Worksheet, _
+                                    ByVal masterRow As Long, _
+                                    ByVal masterLastCol As Long, _
+                                    ByVal outRow As Long)
+
+    Dim c As Long
+
+    For c = 1 To masterLastCol
+        wsUnmatched.Cells(outRow, c).Value = wsMaster.Cells(masterRow, c).Value
+    Next c
+
+End Sub
+
+Private Function GetUnmatchedReason(ByVal titleVal As String, ByVal class3Val As String, ByVal bestScore As Long) As String
+
+    If Trim$(titleVal) = "" And Trim$(class3Val) = "" Then
+        GetUnmatchedReason = "タイトル・分類名３が空欄"
+    ElseIf Trim$(titleVal) = "" Then
+        GetUnmatchedReason = "タイトル空欄"
+    ElseIf Trim$(class3Val) = "" Then
+        GetUnmatchedReason = "分類名３空欄"
+    ElseIf bestScore <= 0 Then
+        GetUnmatchedReason = "類似候補なし"
+    ElseIf bestScore < 40 Then
+        GetUnmatchedReason = "タイトル不一致"
+    ElseIf bestScore < 60 Then
+        GetUnmatchedReason = "第２ガイド不一致"
+    Else
+        GetUnmatchedReason = "一致候補なし"
+    End If
+
+End Function
 
 Private Sub ClearDiffHighlight(ByVal ws As Worksheet, _
                                ByVal startRow As Long, _
@@ -485,28 +555,6 @@ Private Function IsInArray(ByVal target As String, ByVal arr As Variant) As Bool
     IsInArray = False
 
 End Function
-
-Private Function FindHeaderColumnInRange(ByVal ws As Worksheet, _
-                                         ByVal headerRow As Long, _
-                                         ByVal headerName As String, _
-                                         ByVal startCol As Long, _
-                                         ByVal endCol As Long) As Long
-
-    Dim c As Long
-    Dim cellVal As String
-
-    For c = startCol To endCol
-        cellVal = Trim$(CStr(ws.Cells(headerRow, c).Value))
-        If cellVal = headerName Then
-            FindHeaderColumnInRange = c
-            Exit Function
-        End If
-    Next c
-
-    FindHeaderColumnInRange = 0
-
-End Function
-
 
 Private Sub ClearDiffHighlight(ByVal ws As Worksheet, _
                                ByVal startRow As Long, _
