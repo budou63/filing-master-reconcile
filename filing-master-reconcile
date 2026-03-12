@@ -22,10 +22,18 @@ Public Sub 文書管理システム_基準表突合()
     
     Dim colTitle As Long
     Dim colClass3 As Long
+    Dim colCsvRetention As Long
+    Dim colCsvMediaType As Long
     Dim outputStartCol As Long
     
     Dim colFolder As Long
     Dim colGuide2 As Long
+    Dim colMasterRetention As Long
+    Dim colOutputMasterRetention As Long
+
+    Const MATCH_THRESHOLD As Long = 60
+    Const COLOR_RETENTION_DIFF As Long = vbYellow
+    Const COLOR_MEDIA_NOT_ELECTRONIC As Long = 49407
     
     Dim r As Long, c As Long
     Dim bestRow As Long
@@ -59,6 +67,8 @@ Public Sub 文書管理システム_基準表突合()
     '========================
     colTitle = FindHeaderColumn(wsCSV, csvHeaderRow, "タイトル")
     colClass3 = FindHeaderColumn(wsCSV, csvHeaderRow, "分類名３")
+    colCsvRetention = FindHeaderColumn(wsCSV, csvHeaderRow, "保存期間")
+    colCsvMediaType = FindHeaderColumn(wsCSV, csvHeaderRow, "媒体種別")
     
     If colTitle = 0 Then
         Err.Raise vbObjectError + 1000, , "文書管理システム出力側で見出し「タイトル」が見つかりません。"
@@ -66,6 +76,14 @@ Public Sub 文書管理システム_基準表突合()
     
     If colClass3 = 0 Then
         Err.Raise vbObjectError + 1001, , "文書管理システム出力側で見出し「分類名３」が見つかりません。"
+    End If
+
+    If colCsvRetention = 0 Then
+        Err.Raise vbObjectError + 1005, , "文書管理システム出力側で見出し「保存期間」が見つかりません。"
+    End If
+
+    If colCsvMediaType = 0 Then
+        Err.Raise vbObjectError + 1006, , "文書管理システム出力側で見出し「媒体種別」が見つかりません。"
     End If
     
     csvLastRow = wsCSV.Cells(wsCSV.Rows.Count, colTitle).End(xlUp).Row
@@ -104,6 +122,7 @@ Public Sub 文書管理システム_基準表突合()
     '========================
     colFolder = FindHeaderColumn(wsMaster, masterHeaderRow, "個別フォルダー")
     colGuide2 = FindHeaderColumn(wsMaster, masterHeaderRow, "第２ガイド")
+    colMasterRetention = FindHeaderColumn(wsMaster, masterHeaderRow, "保存期間")
     
     If colFolder = 0 Then
         Err.Raise vbObjectError + 1003, , "基準表で見出し「個別フォルダー」が見つかりません。"
@@ -111,6 +130,10 @@ Public Sub 文書管理システム_基準表突合()
     
     If colGuide2 = 0 Then
         Err.Raise vbObjectError + 1004, , "基準表で見出し「第２ガイド」が見つかりません。"
+    End If
+
+    If colMasterRetention = 0 Then
+        Err.Raise vbObjectError + 1007, , "基準表で見出し「保存期間」が見つかりません。"
     End If
     
     masterLastCol = wsMaster.Cells(masterHeaderRow, wsMaster.Columns.Count).End(xlToLeft).Column
@@ -130,6 +153,18 @@ Public Sub 文書管理システム_基準表突合()
             wsCSV.Cells(csvHeaderRow, outputStartCol + c - 1).Value = "空白列" & c
         End If
     Next c
+
+    ' DR列以降に展開した子側見出しから「保存期間」列を特定
+    colOutputMasterRetention = FindHeaderColumnInRange(wsCSV, csvHeaderRow, "保存期間", outputStartCol, outputStartCol + masterLastCol - 1)
+
+    If colOutputMasterRetention = 0 Then
+        Err.Raise vbObjectError + 1008, , "DR列以降の展開データで見出し「保存期間」が見つかりません。"
+    End If
+
+    ' 差異チェックで使用する塗りつぶしを初期化（対象セルのみ）
+    ClearDiffHighlight wsCSV, 2, csvLastRow, colCsvRetention
+    ClearDiffHighlight wsCSV, 2, csvLastRow, colCsvMediaType
+    ClearDiffHighlight wsCSV, 2, csvLastRow, colOutputMasterRetention
     
     '========================
     ' 未突合シート作成
@@ -185,11 +220,17 @@ Public Sub 文書管理システム_基準表突合()
             If bestScore >= 100 Then Exit For
         Next mr
         
-        If bestRow > 0 And bestScore >= 60 Then
+        If bestRow > 0 And bestScore >= MATCH_THRESHOLD Then
             ' 一致した場合：基準表行をDR列以降へ全列出力
             For c = 1 To masterLastCol
                 wsCSV.Cells(r, outputStartCol + c - 1).Value = wsMaster.Cells(bestRow, c).Value
             Next c
+
+            ' 追加機能：差異チェック（セル中心で着色）
+            ApplyDiffHighlight wsCSV, wsMaster, r, bestRow, _
+                               colCsvRetention, colCsvMediaType, _
+                               colMasterRetention, colOutputMasterRetention, _
+                               COLOR_RETENTION_DIFF, COLOR_MEDIA_NOT_ELECTRONIC
         Else
             ' 未突合：CSV行を未突合シートへ出力
             For c = 1 To csvLastCol
@@ -249,6 +290,77 @@ Private Function FindHeaderColumn(ByVal ws As Worksheet, ByVal headerRow As Long
     FindHeaderColumn = 0
     
 End Function
+
+
+Private Function FindHeaderColumnInRange(ByVal ws As Worksheet, _
+                                         ByVal headerRow As Long, _
+                                         ByVal headerName As String, _
+                                         ByVal startCol As Long, _
+                                         ByVal endCol As Long) As Long
+
+    Dim c As Long
+    Dim cellVal As String
+
+    For c = startCol To endCol
+        cellVal = Trim$(CStr(ws.Cells(headerRow, c).Value))
+        If cellVal = headerName Then
+            FindHeaderColumnInRange = c
+            Exit Function
+        End If
+    Next c
+
+    FindHeaderColumnInRange = 0
+
+End Function
+
+
+Private Sub ClearDiffHighlight(ByVal ws As Worksheet, _
+                               ByVal startRow As Long, _
+                               ByVal endRow As Long, _
+                               ByVal col As Long)
+
+    If endRow < startRow Or col <= 0 Then Exit Sub
+
+    ws.Range(ws.Cells(startRow, col), ws.Cells(endRow, col)).Interior.Pattern = xlNone
+
+End Sub
+
+
+Private Sub ApplyDiffHighlight(ByVal wsCSV As Worksheet, _
+                               ByVal wsMaster As Worksheet, _
+                               ByVal csvRow As Long, _
+                               ByVal masterRow As Long, _
+                               ByVal colCsvRetention As Long, _
+                               ByVal colCsvMediaType As Long, _
+                               ByVal colMasterRetention As Long, _
+                               ByVal colOutputMasterRetention As Long, _
+                               ByVal retentionColor As Long, _
+                               ByVal mediaColor As Long)
+
+    Dim csvRetention As String
+    Dim masterRetention As String
+    Dim csvMedia As String
+
+    csvRetention = Trim$(CStr(wsCSV.Cells(csvRow, colCsvRetention).Value))
+    masterRetention = Trim$(CStr(wsMaster.Cells(masterRow, colMasterRetention).Value))
+    csvMedia = Trim$(CStr(wsCSV.Cells(csvRow, colCsvMediaType).Value))
+
+    ' 保存期間差異チェック
+    ' ・空欄同士は差異なし
+    ' ・空欄 vs 値あり / 値違い は差異あり
+    If Not (csvRetention = "" And masterRetention = "") Then
+        If csvRetention <> masterRetention Then
+            wsCSV.Cells(csvRow, colCsvRetention).Interior.Color = retentionColor
+            wsCSV.Cells(csvRow, colOutputMasterRetention).Interior.Color = retentionColor
+        End If
+    End If
+
+    ' 媒体種別チェック（親側が「電子」以外なら着色）
+    If csvMedia <> "電子" Then
+        wsCSV.Cells(csvRow, colCsvMediaType).Interior.Color = mediaColor
+    End If
+
+End Sub
 
 
 Private Function MatchScore(ByVal csvTitle As String, _
@@ -375,4 +487,3 @@ Private Sub DeleteSheetIfExists(ByVal wb As Workbook, ByVal sheetName As String)
     End If
     
 End Sub
-
