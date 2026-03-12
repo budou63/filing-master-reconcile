@@ -66,7 +66,18 @@ Public Sub 文書管理システム_基準表突合()
     On Error GoTo ErrHandler
 
     Set wbCSV = ThisWorkbook
-    Set wsCSV = ActiveSheet
+
+    '========================
+    ' 親側シート固定（Mokuroku）
+    '========================
+    Set wsCSV = GetWorksheetIfExists(wbCSV, "Mokuroku")
+    If wsCSV Is Nothing Then
+        MsgBox "Mokuroku シートが見つかりません。処理を中止します。", vbExclamation
+        GoTo ExitProc
+    End If
+
+    ' 誰がどのシートを開いていても、必ずMokurokuを対象化する
+    wsCSV.Activate
 
     csvHeaderRow = 1
     csvDataStartRow = csvHeaderRow + 1
@@ -795,6 +806,14 @@ Private Function NormalizeText(ByVal s As String) As String
     t = Replace(t, ",", "")
 
     NormalizeText = LCase$(Trim$(t))
+
+End Function
+
+Private Function GetWorksheetIfExists(ByVal wb As Workbook, ByVal sheetName As String) As Worksheet
+
+    On Error Resume Next
+    Set GetWorksheetIfExists = wb.Worksheets(sheetName)
+    On Error GoTo 0
 
 End Function
 

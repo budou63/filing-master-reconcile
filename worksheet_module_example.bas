@@ -1,6 +1,6 @@
 Option Explicit
 
-' 対象：親側シート（文書管理システム出力）のシートモジュール
+' 対象：Mokuroku シートのシートモジュールに貼り付け
 Private Sub Worksheet_Change(ByVal Target As Range)
 
     On Error GoTo SafeExit
