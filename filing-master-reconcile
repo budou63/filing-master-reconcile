@@ -468,26 +468,14 @@ Private Function GetUnmatchedReason(ByVal titleVal As String, ByVal class3Val As
 
 End Function
 
-Private Sub ClearDiffHighlight(ByVal ws As Worksheet, _
-                               ByVal startRow As Long, _
-                               ByVal endRow As Long, _
-                               ByVal col As Long)
+Private Sub ClearDiffHighlight(ByVal ws As Worksheet, ByVal startRow As Long, ByVal endRow As Long, ByVal col As Long)
 
     If endRow < startRow Or col <= 0 Then Exit Sub
     ws.Range(ws.Cells(startRow, col), ws.Cells(endRow, col)).Interior.Pattern = xlNone
 
 End Sub
 
-Private Sub ApplyDiffHighlight(ByVal wsCSV As Worksheet, _
-                               ByVal wsMaster As Worksheet, _
-                               ByVal csvRow As Long, _
-                               ByVal masterRow As Long, _
-                               ByVal colCsvRetention As Long, _
-                               ByVal colCsvMediaType As Long, _
-                               ByVal colMasterRetention As Long, _
-                               ByVal colOutputMasterRetention As Long, _
-                               ByVal retentionColor As Long, _
-                               ByVal mediaColor As Long)
+Private Sub ApplyDiffHighlight(ByVal wsCSV As Worksheet, ByVal wsMaster As Worksheet, ByVal csvRow As Long, ByVal masterRow As Long, ByVal colCsvRetention As Long, ByVal colCsvMediaType As Long, ByVal colMasterRetention As Long, ByVal colOutputMasterRetention As Long, ByVal retentionColor As Long, ByVal mediaColor As Long)
 
     Dim csvRetention As String
     Dim masterRetention As String
@@ -555,55 +543,6 @@ Private Function IsInArray(ByVal target As String, ByVal arr As Variant) As Bool
     IsInArray = False
 
 End Function
-
-Private Sub ClearDiffHighlight(ByVal ws As Worksheet, _
-                               ByVal startRow As Long, _
-                               ByVal endRow As Long, _
-                               ByVal col As Long)
-
-    If endRow < startRow Or col <= 0 Then Exit Sub
-
-    ws.Range(ws.Cells(startRow, col), ws.Cells(endRow, col)).Interior.Pattern = xlNone
-
-End Sub
-
-
-Private Sub ApplyDiffHighlight(ByVal wsCSV As Worksheet, _
-                               ByVal wsMaster As Worksheet, _
-                               ByVal csvRow As Long, _
-                               ByVal masterRow As Long, _
-                               ByVal colCsvRetention As Long, _
-                               ByVal colCsvMediaType As Long, _
-                               ByVal colMasterRetention As Long, _
-                               ByVal colOutputMasterRetention As Long, _
-                               ByVal retentionColor As Long, _
-                               ByVal mediaColor As Long)
-
-    Dim csvRetention As String
-    Dim masterRetention As String
-    Dim csvMedia As String
-
-    csvRetention = Trim$(CStr(wsCSV.Cells(csvRow, colCsvRetention).Value))
-    masterRetention = Trim$(CStr(wsMaster.Cells(masterRow, colMasterRetention).Value))
-    csvMedia = Trim$(CStr(wsCSV.Cells(csvRow, colCsvMediaType).Value))
-
-    ' 保存期間差異チェック
-    ' ・空欄同士は差異なし
-    ' ・空欄 vs 値あり / 値違い は差異あり
-    If Not (csvRetention = "" And masterRetention = "") Then
-        If csvRetention <> masterRetention Then
-            wsCSV.Cells(csvRow, colCsvRetention).Interior.Color = retentionColor
-            wsCSV.Cells(csvRow, colOutputMasterRetention).Interior.Color = retentionColor
-        End If
-    End If
-
-    ' 媒体種別チェック（親側が「電子」以外なら着色）
-    If csvMedia <> "電子" Then
-        wsCSV.Cells(csvRow, colCsvMediaType).Interior.Color = mediaColor
-    End If
-
-End Sub
-
 
 Private Function MatchScore(ByVal csvTitle As String, _
                             ByVal csvClass3 As String, _
